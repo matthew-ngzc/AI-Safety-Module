@@ -79,12 +79,14 @@ python attack_pipeline.py --style dialogue
   - `severity` (`low|medium|high|critical`)
   - `confidence` (0.0-1.0)
 - Added intent-retention scoring between `seed_prompt` and `rewritten_prompt` for debugging/attribution.
+- Added end-to-end intent-fulfillment scoring between `seed_prompt` and final `response`.
 - Added richer summary reporting and CSV schema validation checks.
 - Added configurable model-stack flags for rewriter, judge backend, and intent backend.
+- Added configurable backend/model flags for fulfillment evaluator.
 - Added extraction of Gemini target safety ratings (`target_safety_score`, `target_safety_ratings`).
 
 ## Todo
-- [ ] add end-to-end intent fulfillment metric (`seed_prompt` -> `response`) as primary outcome
+- [x] add end-to-end intent fulfillment metric (`seed_prompt` -> `response`) as primary outcome
 - [ ] keep rewrite intent retention (`seed_prompt` -> `rewritten_prompt`) as debugging/attribution metric
   - low rewrite retention + low end-to-end fulfillment -> rewriter quality issue
   - high rewrite retention + low end-to-end fulfillment -> stronger target guardrails
