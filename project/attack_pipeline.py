@@ -632,6 +632,7 @@ def print_asr_summary(
     all_dfs: list[pd.DataFrame],
     run_dir: Path,
     style_durations: Optional[dict[str, float]] = None,
+    model_info: Optional[dict[str, str]] = None,
 ):
     if not all_dfs:
         print("No results to summarise.")
@@ -700,6 +701,8 @@ def print_asr_summary(
             k: round(float(v), 3) for k, v in style_durations.items()
         }
         stats["total_duration_seconds"] = round(float(sum(style_durations.values())), 3)
+    if model_info:
+        stats["models"] = model_info
     stats_path = run_dir / "stats.json"
     with open(stats_path, "w") as f:
         json.dump(stats, f, indent=2)
@@ -782,6 +785,12 @@ def main():
 
     all_dfs = []
     style_durations: dict[str, float] = {}
+    model_info = {
+        "rewriter_model": args.rewriter_model,
+        "rewriter_base_url": args.rewriter_base_url,
+        "target_model": args.target_model,
+        "judge_model": args.judge_model,
+    }
 
     for style_name, style_instruction in styles_to_run.items():
         style_start = time.perf_counter()
@@ -800,7 +809,7 @@ def main():
         all_dfs.append(df)
 
     # Print ASR summary and save stats
-    print_asr_summary(all_dfs, run_dir, style_durations=style_durations)
+    print_asr_summary(all_dfs, run_dir, style_durations=style_durations, model_info=model_info)
 
 
 if __name__ == "__main__":
