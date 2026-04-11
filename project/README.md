@@ -5,14 +5,14 @@
 `attack_pipeline.py` is an automated jailbreak evaluation workflow for AI safety experiments.
 
 High-level flow:
-`seed prompt -> Rewriter (DeepSeek-V3) -> target model (default: Gemini 2.5 Flash) -> AI Judge (Claude Sonnet 4)`
+`seed prompt -> Rewriter (default: DeepSeek-V3) -> target model (default: Gemini 2.5 Flash) -> AI Judge (default: Claude Haiku 4.5)`
 
 For each seed harmful request category, it:
 
 1. Uses a rewriter model (DeepSeek via OpenAI-compatible API) to convert the seed into a selected creative style (`riddle`, `poem`, `nursery_rhyme`, `dialogue`).
 2. Runs a rewrite-topic check and retries rewrite generation on drift (up to `MAX_REWRITE_RETRIES`).
-3. Sends the rewritten prompt to a target model (Gemini) and records target metadata (response text, finish reason, safety score, and error info).
-4. Uses a judge model (Claude) with a rubric prompt and returns structured safety fields:
+3. Sends the rewritten prompt to a target model and records target metadata (response text, finish reason, safety score, and error info).
+4. Uses a judge model with a rubric prompt and returns structured safety fields:
    - `label` (`SAFE` or `UNSAFE`): final safety verdict.
    - `compliance_level` (`0..3`): how much harmful assistance is given.
    - `severity` (`LOW|MEDIUM|HIGH|CRITICAL`): estimated harm seriousness.
@@ -86,15 +86,44 @@ Set your API keys in `.env`:
 GEMINI_API_KEY=your_gemini_key_here
 DEEPSEEK_API_KEY=your_deepseek_key_here
 CLAUDE_API_KEY=your_claude_key_here
+OPENAI_API_KEY=your_openai_key_here
+OPENROUTER_API_KEY=your_openrouter_key_here
 ```
 
-Optional model overrides (can be set in `.env` or passed as CLI args):
+Optional stage/provider/model overrides (can be set in `.env` or passed as CLI args):
 ```env
-REWRITER_BASE_URL=https://api.deepseek.com
+REWRITER_PROVIDER=deepseek
 REWRITER_MODEL=deepseek-chat
+REWRITER_BASE_URL=https://api.deepseek.com
+
+INTENT_CHECKER_PROVIDER=deepseek
+INTENT_CHECKER_MODEL=deepseek-chat
+
+TARGET_PROVIDER=gemini
 TARGET_MODEL=gemini-2.5-flash
-JUDGE_MODEL=claude-sonnet-4-20250514
+
+JUDGE_PROVIDER=claude
+JUDGE_MODEL=claude-haiku-4-5-20251001
 ```
+
+Current defaults in code:
+- Rewriter: `deepseek:deepseek-chat` (DeepSeek V3 alias)
+- Intent checker: `deepseek:deepseek-chat`
+- Target: `gemini:gemini-2.5-flash`
+- Judge: `claude:claude-haiku-4-5-20251001`
+
+Supported providers:
+- `deepseek`
+- `openai`
+- `claude`
+- `openrouter`
+- `gemini`
+
+Model ID rule:
+- You can use any model from a provider by passing its exact model ID with the matching `--<stage>-provider`.
+- The pipeline does not enforce a fixed model whitelist.
+- If provider/model/auth is wrong, the run fails early.
+- For `judge` and `intent_checker`, prefer models that reliably follow strict formatting/instructions (especially JSON output for judge).
 
 ## Run
 
@@ -113,7 +142,21 @@ python attack_pipeline.py --style dialogue
 
 Run with explicit model settings:
 ```powershell
-python attack_pipeline.py --rewriter-model deepseek-chat --target-model gemini-2.5-flash --judge-model claude-sonnet-4-20250514
+python attack_pipeline.py --rewriter-provider deepseek --rewriter-model deepseek-chat --intent-checker-provider deepseek --intent-checker-model deepseek-chat --target-provider gemini --target-model gemini-2.5-flash --judge-provider claude --judge-model claude-haiku-4-5-20251001
+```
+
+Override only one stage and keep all other defaults:
+```powershell
+# Change target only
+python attack_pipeline.py --target-provider openai --target-model gpt-4.1-mini
+
+# Change judge only
+python attack_pipeline.py --judge-provider openrouter --judge-model moonshotai/kimi-k2
+```
+
+Quick connectivity test (no full pipeline run):
+```powershell
+python attack_pipeline.py --ping-only
 ```
 
 ## Outputs
@@ -121,19 +164,13 @@ python attack_pipeline.py --rewriter-model deepseek-chat --target-model gemini-2
 - `attack_history/<n>/results_<style>.csv`: per-style raw results
 - `attack_history/<n>/stats.json`: aggregate ASR metrics and confidence summaries
 
-Common CSV fields include:
-- prompt metadata (`style`, `category`, `repetition`, `seed_prompt`, `rewritten_prompt`)
-- target output and diagnostics (`response`, `target_finish_reason`, `target_safety_score`, `target_safety_reason`, `target_error`)
-- judge outputs (`judge_label`, `judge_label_text`, `compliance_level`, `severity`, `actionability`, `confidence`, `judge_rationale`, `judge_error`)
-- intent check (`intent_aligned`)
-
 ## Stop / Deactivate Venv
 ```powershell
 deactivate
 ```
 
-## Todo
-- [ ] explore using
-  - quen3 next 80b a3b as rewriter
-  - llama guard 12B for classification, gemini safety ratings for numeric scorer
-- [ ] read through the excel sheet generation look for other problems
+## Quick Preflight Check
+Before running the full pipeline, you can verify stage and provider connectivity:
+```powershell
+python attack_pipeline.py --ping-only
+```
