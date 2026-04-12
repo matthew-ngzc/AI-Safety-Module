@@ -1,6 +1,8 @@
 param(
     [string]$PythonExe = "python",
-    [string]$Style = ""
+    [string]$Style = "",
+    [int]$ReuseRewritesFromRun = 57,
+    [switch]$IncludeBaselineExperiment
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,6 +14,9 @@ function Invoke-Experiment {
     )
 
     $baseArgs = @("attack_pipeline.py")
+    if ($ReuseRewritesFromRun -gt 0) {
+        $baseArgs += @("--reuse-rewrites-from-run", "$ReuseRewritesFromRun")
+    }
     if ($Style -and $Style.Trim().Length -gt 0) {
         $baseArgs += @("--style", $Style.Trim())
     }
@@ -94,16 +99,40 @@ $experiments = @(
             "--target-thinking-budget", "0",
             "--target-reasoning-effort", "none"
         )
+    },
+    @{
+        Name = "7_openrouter_qwen3_32b_reasoning_medium"
+        Args = @(
+            "--target-provider", "openrouter",
+            "--target-model", "qwen/qwen3-32b",
+            "--target-max-tokens", "4096",
+            "--target-thinking-budget", "2048",
+            "--target-reasoning-effort", "medium"
+        )
+    },
+    @{
+        Name = "8_deepseek_chat_thinking_on"
+        Args = @(
+            "--target-provider", "deepseek",
+            "--target-model", "deepseek-chat",
+            "--target-max-tokens", "4096",
+            "--target-thinking-budget", "2048",
+            "--target-reasoning-effort", "none"
+        )
     }
 )
 
 $suiteStart = Get-Date
 for ($i = 0; $i -lt $experiments.Count; $i++) {
     $exp = $experiments[$i]
+    if (-not $IncludeBaselineExperiment -and $exp.Name -eq "1_gemini_25_flash_thinking_on") {
+        Write-Host "Skipping baseline experiment '$($exp.Name)' (already present in source run $ReuseRewritesFromRun)."
+        continue
+    }
     Invoke-Experiment -Name $exp.Name -Args $exp.Args
 }
 $suiteElapsed = (Get-Date) - $suiteStart
 
 Write-Host ""
-Write-Host "All 6 experiments completed successfully."
+Write-Host "All selected experiments completed successfully."
 Write-Host ("TOTAL ELAPSED: {0:n1}s" -f $suiteElapsed.TotalSeconds)

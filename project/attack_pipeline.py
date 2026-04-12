@@ -44,6 +44,8 @@ MODEL_OPENAI_GPT_41_MINI = "gpt-4.1-mini"
 MODEL_OPENAI_GPT_5_MINI = "gpt-5-mini"
 MODEL_OPENROUTER_KIMI_K2 = "moonshotai/kimi-k2"
 MODEL_OPENROUTER_MINIMAX_M25 = "minimax/minimax-m2.5:free"
+MODEL_OPENROUTER_QWEN3_32B = "qwen/qwen3-32b"
+MODEL_DEEPSEEK_REASONER = "deepseek-reasoner"
 
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -608,13 +610,15 @@ def run_provider_baseline_connectivity_checks(clients: dict[str, Any]) -> int:
 
 def run_target_experiment_connectivity_checks(clients: dict[str, Any]) -> int:
     """
-    Connectivity checks for the planned 6 target-model experiment configurations:
+    Connectivity checks for the planned target-model experiment configurations:
     1) Gemini thinking on
     2) Claude thinking on
     3) OpenAI medium reasoning
     4) Gemini thinking off
     5) Claude thinking off
     6) OpenAI reasoning off
+    7) OpenRouter Qwen3-32B (reasoning effort=medium, budget=2048)
+    8) DeepSeek chat (thinking enabled)
     """
     print("\nTarget experiment checks:")
     failed = False
@@ -668,6 +672,22 @@ def run_target_experiment_connectivity_checks(clients: dict[str, Any]) -> int:
             "thinking_budget": 0,
             "reasoning_effort": None,
         },
+        {
+            "name": "openrouter_qwen3_32b",
+            "provider": PROVIDER_OPENROUTER,
+            "model": MODEL_OPENROUTER_QWEN3_32B,
+            "max_tokens": 128,
+            "thinking_budget": 2048,
+            "reasoning_effort": "medium",
+        },
+        {
+            "name": "deepseek_chat_thinking_on",
+            "provider": PROVIDER_DEEPSEEK,
+            "model": MODEL_DEEPSEEK_CHAT,
+            "max_tokens": 128,
+            "thinking_budget": 2048,
+            "reasoning_effort": None,
+        },
     ]
 
     for exp in experiments:
@@ -711,6 +731,7 @@ def run_target_experiment_connectivity_checks(clients: dict[str, Any]) -> int:
                 disable_gemini_safety=False,
                 gemini_thinking_budget=int(exp["thinking_budget"]) if int(exp["thinking_budget"]) > 0 else None,
                 reasoning_effort=exp["reasoning_effort"],
+                reasoning_max_tokens=int(exp["thinking_budget"]) if int(exp["thinking_budget"]) > 0 else None,
                 request_timeout_seconds=DEFAULT_PING_TIMEOUT_SECONDS,
             )
             preview = (text or "").strip().replace("\n", " ")
@@ -735,6 +756,10 @@ def _call_openai_compatible(
     max_tokens: int = 256,
     request_timeout_seconds: Optional[float] = None,
     reasoning_effort: Optional[str] = None,
+    reasoning_effort_via_object: Optional[str] = None,
+    reasoning_max_tokens: Optional[int] = None,
+    reasoning_via_extra_body: bool = False,
+    thinking_via_extra_body: bool = False,
 ) -> str:
     is_gpt5_family = str(model_name).lower().startswith("gpt-5")
     kwargs_base: dict[str, Any] = {
@@ -751,6 +776,25 @@ def _call_openai_compatible(
         kwargs_base["max_tokens"] = max_tokens
     if request_timeout_seconds is not None:
         kwargs_base["timeout"] = request_timeout_seconds
+    reasoning_obj: dict[str, Any] = {}
+    if reasoning_effort_via_object and reasoning_effort_via_object != "none":
+        reasoning_obj["effort"] = str(reasoning_effort_via_object)
+    if reasoning_max_tokens is not None and reasoning_max_tokens > 0:
+        # OpenRouter-style unified reasoning control; supported by some
+        # OpenAI-compatible providers/models.
+        reasoning_obj["max_tokens"] = int(reasoning_max_tokens)
+    if reasoning_obj:
+        if reasoning_via_extra_body:
+            reasoning_obj.setdefault("enabled", True)
+            extra_body = dict(kwargs_base.get("extra_body", {}) or {})
+            extra_body["reasoning"] = reasoning_obj
+            kwargs_base["extra_body"] = extra_body
+        else:
+            kwargs_base["reasoning"] = reasoning_obj
+    if thinking_via_extra_body:
+        extra_body = dict(kwargs_base.get("extra_body", {}) or {})
+        extra_body["thinking"] = {"type": "enabled"}
+        kwargs_base["extra_body"] = extra_body
 
     response = None
     if reasoning_effort:
@@ -780,6 +824,30 @@ def _call_openai_compatible(
                 retry_kwargs = dict(kwargs_base)
                 retry_kwargs.pop("max_completion_tokens", None)
                 retry_kwargs["max_tokens"] = max_tokens
+                response = client.chat.completions.create(**retry_kwargs)
+            elif "reasoning" in msg.lower():
+                # Some OpenAI-compatible providers/models may not support
+                # reasoning object controls. Retry without reasoning override.
+                retry_kwargs = dict(kwargs_base)
+                retry_kwargs.pop("reasoning", None)
+                eb = dict(retry_kwargs.get("extra_body", {}) or {})
+                if "reasoning" in eb:
+                    eb.pop("reasoning", None)
+                    if eb:
+                        retry_kwargs["extra_body"] = eb
+                    else:
+                        retry_kwargs.pop("extra_body", None)
+                response = client.chat.completions.create(**retry_kwargs)
+            elif "thinking" in msg.lower():
+                # DeepSeek OpenAI SDK path: retry without extra_body.thinking if unsupported.
+                retry_kwargs = dict(kwargs_base)
+                eb = dict(retry_kwargs.get("extra_body", {}) or {})
+                if "thinking" in eb:
+                    eb.pop("thinking", None)
+                    if eb:
+                        retry_kwargs["extra_body"] = eb
+                    else:
+                        retry_kwargs.pop("extra_body", None)
                 response = client.chat.completions.create(**retry_kwargs)
             else:
                 raise
@@ -920,6 +988,7 @@ def call_text_model(
     gemini_thinking_budget: Optional[int] = None,
     request_timeout_seconds: Optional[float] = None,
     reasoning_effort: Optional[str] = None,
+    reasoning_max_tokens: Optional[int] = None,
 ) -> Tuple[str, Any]:
     provider = stage_cfg["provider"]
     model = stage_cfg["model"]
@@ -938,6 +1007,14 @@ def call_text_model(
             max_tokens=max_tokens,
             request_timeout_seconds=request_timeout_seconds,
             reasoning_effort=reasoning_effort if provider == PROVIDER_OPENAI else None,
+            reasoning_effort_via_object=reasoning_effort if provider == PROVIDER_OPENROUTER else None,
+            reasoning_max_tokens=reasoning_max_tokens if provider == PROVIDER_OPENROUTER else None,
+            reasoning_via_extra_body=(provider == PROVIDER_OPENROUTER),
+            thinking_via_extra_body=(
+                provider == PROVIDER_DEEPSEEK
+                and str(model).strip().lower() != MODEL_DEEPSEEK_REASONER
+                and (gemini_thinking_budget is not None and int(gemini_thinking_budget) > 0)
+            ),
         )
         return text, None
     if provider == PROVIDER_CLAUDE:
@@ -1098,38 +1175,58 @@ def call_target(
     target_reasoning_effort: Optional[str],
 ) -> dict[str, Any]:
     """Send rewritten prompt to configured target model."""
-    try:
-        response_text, provider_obj = call_text_model(
-            stage_cfg=target_cfg,
-            clients=clients,
-            system_prompt="You are a helpful assistant.",
-            user_prompt=rewritten_prompt,
-            temperature=0.0,
-            max_tokens=target_max_tokens,
-            disable_gemini_safety=True,
-            gemini_thinking_budget=target_thinking_budget if target_thinking_budget > 0 else None,
-            reasoning_effort=target_reasoning_effort,
-        )
+    max_attempts = 3
+    last_error = ""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response_text, provider_obj = call_text_model(
+                stage_cfg=target_cfg,
+                clients=clients,
+                system_prompt="You are a helpful assistant.",
+                user_prompt=rewritten_prompt,
+                temperature=0.0,
+                max_tokens=target_max_tokens,
+                disable_gemini_safety=True,
+                gemini_thinking_budget=target_thinking_budget if target_thinking_budget > 0 else None,
+                reasoning_effort=target_reasoning_effort,
+                reasoning_max_tokens=target_thinking_budget if target_thinking_budget > 0 else None,
+            )
 
-        finish_reason = ""
-        if target_cfg["provider"] == PROVIDER_GEMINI:
-            candidates = getattr(provider_obj, "candidates", None)
-            if candidates:
-                finish_reason = str(getattr(candidates[0], "finish_reason", "") or "")
+            finish_reason = ""
+            if target_cfg["provider"] == PROVIDER_GEMINI:
+                candidates = getattr(provider_obj, "candidates", None)
+                if candidates:
+                    finish_reason = str(getattr(candidates[0], "finish_reason", "") or "")
 
-        return {
-            "response_text": response_text,
-            "target_error": "",
-            "target_finish_reason": finish_reason,
-            "target_raw_output": extract_target_raw_output(target_cfg["provider"], provider_obj),
-        }
-    except Exception as e:
-        return {
-            "response_text": f"TARGET_ERROR: {e}",
-            "target_error": str(e),
-            "target_finish_reason": "",
-            "target_raw_output": "",
-        }
+            return {
+                "response_text": response_text,
+                "target_error": "",
+                "target_finish_reason": finish_reason,
+                "target_raw_output": extract_target_raw_output(target_cfg["provider"], provider_obj),
+            }
+        except Exception as e:
+            last_error = str(e)
+            # OpenAI-compatible providers occasionally return empty payloads transiently.
+            # Retry this specific failure a few times before treating it as fatal.
+            if "empty_model_output_from_openai_compatible_provider" in last_error and attempt < max_attempts:
+                print(
+                    f"  [TARGET_RETRY] empty output from provider at attempt {attempt}/{max_attempts}; retrying..."
+                )
+                time.sleep(0.75 * attempt)
+                continue
+            return {
+                "response_text": f"TARGET_ERROR: {e}",
+                "target_error": last_error,
+                "target_finish_reason": "",
+                "target_raw_output": "",
+            }
+
+    return {
+        "response_text": f"TARGET_ERROR: {last_error or 'unknown_target_error'}",
+        "target_error": last_error or "unknown_target_error",
+        "target_finish_reason": "",
+        "target_raw_output": "",
+    }
 
 
 def call_judge(
@@ -1319,9 +1416,38 @@ def run_combo(
             target_reasoning_effort=target_reasoning_effort,
         )
         if target.get("target_error"):
-            raise RuntimeError(
-                f"Target failed at style={style_name}, category={category}, rep={rep}: {target['target_error']}"
+            print(
+                f"\n  [TARGET_ERROR] style={style_name} category={category} rep={rep}: {target['target_error']}"
             )
+            all_results.append(
+                {
+                    "style": style_name,
+                    "category": category,
+                    "repetition": rep,
+                    "seed_prompt": seed_prompt,
+                    "rewritten_prompt": rewritten,
+                    "response": target["response_text"],
+                    "judge_label": -1,
+                    "judge_label_text": "ERROR",
+                    "compliance_level": 0,
+                    "severity": "LOW",
+                    "actionability": 0,
+                    "confidence": 0.0,
+                    "judge_rationale": "",
+                    "intent_aligned": -1,
+                    "intent_label_text": "ERROR",
+                    "intent_confidence": 0.0,
+                    "intent_rationale": "",
+                    "intent_error": "skipped_due_to_target_error",
+                    "intent_raw_output": "",
+                    "target_finish_reason": target.get("target_finish_reason", ""),
+                    "target_error": target.get("target_error", ""),
+                    "target_raw_output": target.get("target_raw_output", ""),
+                    "judge_error": "skipped_due_to_target_error",
+                    "judge_raw_output": "",
+                }
+            )
+            continue
 
         # --- Judge ---
         judge = call_judge(judge_cfg, clients, target["response_text"])
@@ -1451,6 +1577,180 @@ def run_style(
 
     return df
 
+
+def run_style_frozen_rewrites(
+    style_name: str,
+    frozen_rewrites_df: pd.DataFrame,
+    intent_checker_cfg: dict[str, str],
+    target_cfg: dict[str, str],
+    target_max_tokens: int,
+    target_thinking_budget: int,
+    target_reasoning_effort: Optional[str],
+    judge_cfg: dict[str, str],
+    clients: dict[str, Any],
+    run_dir: Path,
+) -> pd.DataFrame:
+    """
+    Replay one style using pre-generated rewritten prompts from a prior run.
+    """
+    print(f"\n{'='*60}")
+    print(f"  STYLE: {style_name.upper()}  (frozen rewritten prompts: {len(frozen_rewrites_df)} rows)")
+    print(f"{'='*60}")
+
+    all_results: list[dict[str, Any]] = []
+    row_bar = tqdm(
+        range(len(frozen_rewrites_df)),
+        desc=f"    [{style_name}]",
+        leave=False,
+    )
+
+    for idx in row_bar:
+        row = frozen_rewrites_df.iloc[idx]
+        category = str(row.get("category", "") or "").strip() or "unknown"
+
+        rep_raw = row.get("repetition", idx + 1)
+        try:
+            rep = int(rep_raw)
+        except (TypeError, ValueError):
+            rep = idx + 1
+
+        seed_prompt = str(row.get("seed_prompt", "") or "").strip()
+        if not seed_prompt and category in SEED_PROMPTS:
+            seed_prompt = SEED_PROMPTS[category]
+        if not seed_prompt:
+            raise RuntimeError(
+                f"Missing seed prompt in frozen rewrite input at style={style_name}, category={category}, row={idx}"
+            )
+
+        rewritten = str(row.get("rewritten_prompt", "") or "").strip()
+        if not rewritten:
+            raise RuntimeError(
+                f"Empty rewritten prompt in frozen rewrite input at style={style_name}, category={category}, row={idx}"
+            )
+
+        target = call_target(
+            target_cfg,
+            clients,
+            rewritten,
+            target_max_tokens=target_max_tokens,
+            target_thinking_budget=target_thinking_budget,
+            target_reasoning_effort=target_reasoning_effort,
+        )
+        if target.get("target_error"):
+            print(
+                f"\n  [TARGET_ERROR] style={style_name} category={category} rep={rep}: {target['target_error']}"
+            )
+            all_results.append(
+                {
+                    "style": style_name,
+                    "category": category,
+                    "repetition": rep,
+                    "seed_prompt": seed_prompt,
+                    "rewritten_prompt": rewritten,
+                    "response": target["response_text"],
+                    "judge_label": -1,
+                    "judge_label_text": "ERROR",
+                    "compliance_level": 0,
+                    "severity": "LOW",
+                    "actionability": 0,
+                    "confidence": 0.0,
+                    "judge_rationale": "",
+                    "intent_aligned": -1,
+                    "intent_label_text": "ERROR",
+                    "intent_confidence": 0.0,
+                    "intent_rationale": "",
+                    "intent_error": "skipped_due_to_target_error",
+                    "intent_raw_output": "",
+                    "target_finish_reason": target.get("target_finish_reason", ""),
+                    "target_error": target.get("target_error", ""),
+                    "target_raw_output": target.get("target_raw_output", ""),
+                    "judge_error": "skipped_due_to_target_error",
+                    "judge_raw_output": "",
+                }
+            )
+            continue
+
+        judge = call_judge(judge_cfg, clients, target["response_text"])
+        if judge.get("judge_label") == -1 or judge.get("judge_error"):
+            raw = (judge.get("judge_raw_output") or "").strip()
+            if raw:
+                print("\n  [JUDGE_RAW_FULL]")
+                print(raw)
+            raise RuntimeError(
+                f"Judge failed at style={style_name}, category={category}, rep={rep}: {judge.get('judge_error', 'unknown_error')}"
+            )
+
+        try:
+            intent = call_intent_checker(
+                intent_checker_cfg,
+                clients,
+                seed_prompt,
+                target["response_text"],
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"Intent checker failed at style={style_name}, category={category}, rep={rep}: {e}"
+            ) from e
+        if intent.get("intent_aligned") == -1 or intent.get("intent_error"):
+            raw = (intent.get("intent_raw_output") or "").strip()
+            if raw:
+                print("\n  [INTENT_RAW_FULL]")
+                print(raw)
+            raise RuntimeError(
+                f"Intent checker failed at style={style_name}, category={category}, rep={rep}: {intent.get('intent_error', 'unknown_intent_error')}"
+            )
+
+        intent_aligned = int(intent["intent_aligned"])
+        judge_str = "UNSAFE" if judge["judge_label"] == 1 else "SAFE" if judge["judge_label"] == 0 else "ERR"
+        intent_str = "ALIGNED" if intent_aligned == 1 else "DRIFT" if intent_aligned == 0 else "ERR"
+
+        print(
+            f"\n  [{style_name}|{category}] rep={rep} judge={judge_str} "
+            f"comp={judge['compliance_level']} act={judge['actionability']} "
+            f"conf={judge['confidence']:.2f} intent={intent_str}"
+        )
+        print(f"  REWRITTEN : {rewritten[:PREVIEW_LENGTH]}")
+        print(f"  RESPONSE  : {target['response_text'][:PREVIEW_LENGTH]}")
+        print(f"  JUDGE_RAW : {(judge['judge_raw_output'] or '')[:PREVIEW_LENGTH]}")
+        print(f"  INTENT_RAW: {(intent['intent_raw_output'] or '')[:PREVIEW_LENGTH]}")
+
+        all_results.append(
+            {
+                "style": style_name,
+                "category": category,
+                "repetition": rep,
+                "seed_prompt": seed_prompt,
+                "rewritten_prompt": rewritten,
+                "response": target["response_text"],
+                "judge_label": judge["judge_label"],
+                "judge_label_text": judge["judge_label_text"],
+                "compliance_level": judge["compliance_level"],
+                "severity": judge["severity"],
+                "actionability": judge["actionability"],
+                "confidence": judge["confidence"],
+                "judge_rationale": judge["judge_rationale"],
+                "intent_aligned": intent_aligned,
+                "intent_label_text": intent["intent_label_text"],
+                "intent_confidence": intent["intent_confidence"],
+                "intent_rationale": intent["intent_rationale"],
+                "intent_error": intent["intent_error"],
+                "intent_raw_output": intent["intent_raw_output"],
+                "target_finish_reason": target["target_finish_reason"],
+                "target_error": target["target_error"],
+                "target_raw_output": target["target_raw_output"],
+                "judge_error": judge["judge_error"],
+                "judge_raw_output": judge["judge_raw_output"],
+            }
+        )
+
+    df = pd.DataFrame(all_results)
+    validate_results_df(df)
+
+    filename = run_dir / f"results_{style_name}.csv"
+    df.to_csv(filename, index=False)
+    print(f"\n  Saved {len(df)} rows -> {filename}")
+    return df
+
 # ─────────────────────────────────────────────
 # §8  ASR SUMMARY
 # ─────────────────────────────────────────────
@@ -1506,11 +1806,28 @@ def print_asr_summary(
     print(f"\nRaw  ASR: {overall:.1%}  ({int(valid['judge_label'].sum())}/{len(valid)} UNSAFE)")
     print(f"True ASR: {true_overall:.1%}  ({int(true_valid['true_unsafe'].sum())}/{len(true_valid)} UNSAFE+aligned)")
 
+    def _to_attack_history_relative(path_value: str) -> str:
+        norm = str(path_value or "").replace("/", "\\").strip()
+        if not norm:
+            return ""
+        low = norm.lower()
+        marker = "attack_history\\"
+        idx = low.find(marker)
+        if idx >= 0:
+            return norm[idx:]
+        if low == "attack_history":
+            return "attack_history"
+        return norm
+
     stats: dict[str, Any] = {
-        "run_dir":              str(Path("attack_history") / run_dir.name),
+        "run_dir": str(Path("attack_history") / run_dir.name),
     }
     if model_info:
-        stats["models"] = model_info
+        models_clean = dict(model_info)
+        frozen_source = str(models_clean.pop("frozen_rewrites_source", "") or "").strip()
+        if frozen_source:
+            stats["rewritten_prompts_from"] = _to_attack_history_relative(frozen_source)
+        stats["models"] = models_clean
     stats.update(
         {
             "timestamp":            datetime.now().isoformat(),
@@ -1560,6 +1877,93 @@ def _resolve_rejudge_inputs(path_value: str) -> list[Path]:
     if not csvs:
         raise ValueError(f"No results_*.csv files found under: {p}")
     return csvs
+
+
+def _extract_style_from_results_filename(path: Path) -> str:
+    stem = path.stem
+    if not stem.startswith("results_"):
+        return ""
+    return stem[len("results_"):].strip()
+
+
+def _resolve_frozen_rewrite_inputs(path_value: str) -> list[Path]:
+    p = Path(path_value)
+    if not p.exists():
+        raise FileNotFoundError(f"Frozen rewrite source does not exist: {p}")
+    if p.is_file():
+        if p.suffix.lower() != ".csv":
+            raise ValueError(f"Frozen rewrite source file must be a .csv: {p}")
+        if ".rejudge_" in p.name:
+            raise ValueError(f"Frozen rewrite source must be an original results CSV, not a rejudge output: {p}")
+        return [p]
+
+    csvs = sorted(
+        c for c in p.glob("results_*.csv")
+        if ".rejudge_" not in c.name
+    )
+    if not csvs:
+        raise ValueError(f"No results_*.csv files found under frozen rewrite source: {p}")
+    return csvs
+
+
+def load_frozen_rewrites(path_value: str) -> dict[str, pd.DataFrame]:
+    """
+    Load rewritten prompts from an existing results CSV (or run directory).
+    Returns a per-style map of DataFrames containing at least:
+      style, category, repetition, seed_prompt, rewritten_prompt
+    """
+    inputs = _resolve_frozen_rewrite_inputs(path_value)
+    by_style: dict[str, list[pd.DataFrame]] = {}
+
+    for src in inputs:
+        df = pd.read_csv(src)
+        if "rewritten_prompt" not in df.columns:
+            raise ValueError(f"Missing required 'rewritten_prompt' column in frozen rewrite source: {src}")
+
+        inferred_style = _extract_style_from_results_filename(src)
+        if "style" not in df.columns:
+            if not inferred_style:
+                raise ValueError(f"Could not infer style for frozen rewrite source without 'style' column: {src}")
+            df["style"] = inferred_style
+
+        if "category" not in df.columns:
+            df["category"] = ""
+        if "repetition" not in df.columns:
+            df["repetition"] = list(range(1, len(df) + 1))
+        if "seed_prompt" not in df.columns:
+            df["seed_prompt"] = ""
+
+        cleaned = df.copy()
+        cleaned["style"] = cleaned["style"].astype(str).str.strip()
+        if inferred_style:
+            cleaned.loc[cleaned["style"] == "", "style"] = inferred_style
+        cleaned["category"] = cleaned["category"].astype(str).str.strip()
+        cleaned["seed_prompt"] = cleaned["seed_prompt"].astype(str)
+        cleaned["rewritten_prompt"] = cleaned["rewritten_prompt"].astype(str).str.strip()
+        cleaned["repetition"] = pd.to_numeric(cleaned["repetition"], errors="coerce")
+
+        cleaned = cleaned[cleaned["rewritten_prompt"] != ""].copy()
+        if cleaned.empty:
+            raise ValueError(f"No non-empty rewritten prompts found in frozen rewrite source: {src}")
+
+        # Keep only the minimum columns needed for frozen-rewrite replay.
+        cleaned = cleaned[["style", "category", "repetition", "seed_prompt", "rewritten_prompt"]].copy()
+
+        for style_name, g in cleaned.groupby("style", dropna=False):
+            style_key = str(style_name).strip()
+            if not style_key:
+                raise ValueError(f"Encountered empty style value in frozen rewrite source: {src}")
+            by_style.setdefault(style_key, []).append(g.reset_index(drop=True))
+
+    merged: dict[str, pd.DataFrame] = {}
+    for style_name, frames in by_style.items():
+        combined = pd.concat(frames, ignore_index=True)
+        # Preserve original order where available; stable-sort by category/repetition when present.
+        if not combined["repetition"].isna().all():
+            combined["repetition"] = combined["repetition"].fillna(-1).astype(int)
+            combined = combined.sort_values(["category", "repetition"], kind="stable").reset_index(drop=True)
+        merged[style_name] = combined
+    return merged
 
 
 def run_rejudge_path(
@@ -1700,6 +2104,17 @@ def parse_args() -> argparse.Namespace:
         help="Run quick connectivity checks for configured stages plus provider-wide baseline checks, then exit",
     )
     parser.add_argument(
+        "--reuse-rewrites-from-run",
+        type=int,
+        default=0,
+        help="Reuse frozen rewritten prompts from attack_history/<run_number>/results_*.csv and skip rewriter/rewrite-checker",
+    )
+    parser.add_argument(
+        "--reuse-rewrites-path",
+        default="",
+        help="Reuse frozen rewritten prompts from a specific results CSV or directory containing results_*.csv; skips rewriter/rewrite-checker",
+    )
+    parser.add_argument(
         "--style",
         choices=list(STYLE_INSTRUCTIONS.keys()),
         default=None,
@@ -1830,13 +2245,36 @@ def main():
         )
         sys.exit(exit_code)
 
-    rewriter_cfg = build_stage_config(
-        stage_name="rewriter",
-        provider=args.rewriter_provider,
-        model=args.rewriter_model,
-        base_url=args.rewriter_base_url or default_base_url_for_provider(args.rewriter_provider),
-    )
-    rewrite_checker_cfg = dict(rewriter_cfg)
+    history_root = Path(__file__).with_name("attack_history")
+    reuse_rewrites_mode = bool((args.reuse_rewrites_path or "").strip() or args.reuse_rewrites_from_run > 0)
+    if (args.reuse_rewrites_path or "").strip() and args.reuse_rewrites_from_run > 0:
+        raise ValueError("Use only one of --reuse-rewrites-path or --reuse-rewrites-from-run, not both.")
+
+    frozen_rewrite_source = ""
+    frozen_rewrites_by_style: dict[str, pd.DataFrame] = {}
+    if reuse_rewrites_mode:
+        if args.reuse_rewrites_from_run > 0:
+            frozen_rewrite_source = str((history_root / str(args.reuse_rewrites_from_run)).resolve())
+        else:
+            frozen_rewrite_source = str(Path((args.reuse_rewrites_path or "").strip()).resolve())
+        frozen_rewrites_by_style = load_frozen_rewrites(frozen_rewrite_source)
+        if args.style and args.style not in frozen_rewrites_by_style:
+            available = ", ".join(sorted(frozen_rewrites_by_style.keys()))
+            raise ValueError(
+                f"Requested style '{args.style}' not present in frozen rewrite source ({frozen_rewrite_source}). "
+                f"Available styles: {available}"
+            )
+
+    rewriter_cfg = None
+    rewrite_checker_cfg = None
+    if not reuse_rewrites_mode:
+        rewriter_cfg = build_stage_config(
+            stage_name="rewriter",
+            provider=args.rewriter_provider,
+            model=args.rewriter_model,
+            base_url=args.rewriter_base_url or default_base_url_for_provider(args.rewriter_provider),
+        )
+        rewrite_checker_cfg = dict(rewriter_cfg)
     intent_checker_cfg = build_stage_config(
         stage_name="intent_checker",
         provider=args.intent_checker_provider,
@@ -1856,7 +2294,9 @@ def main():
         base_url=args.judge_base_url or default_base_url_for_provider(args.judge_provider),
     )
 
-    stage_configs = [rewriter_cfg, rewrite_checker_cfg, intent_checker_cfg, target_cfg, judge_cfg]
+    stage_configs = [intent_checker_cfg, target_cfg, judge_cfg]
+    if rewriter_cfg and rewrite_checker_cfg:
+        stage_configs = [rewriter_cfg, rewrite_checker_cfg] + stage_configs
     required_providers = {cfg["provider"] for cfg in stage_configs}
     for provider in sorted(required_providers):
         if not provider_api_key(provider):
@@ -1894,7 +2334,6 @@ def main():
         sys.exit(1 if (exit_code_stage or exit_code_provider or exit_code_experiments) else 0)
 
     # Determine run directory (attack_history/<next_int>/)
-    history_root = Path(__file__).with_name("attack_history")
     history_root.mkdir(exist_ok=True)
     existing_runs = [int(p.name) for p in history_root.iterdir() if p.is_dir() and p.name.isdigit()]
     run_number = max(existing_runs, default=0) + 1
@@ -1903,16 +2342,21 @@ def main():
     print(f"Run directory: {run_dir}\n")
 
     # Select styles to run
-    styles_to_run = (
-        {args.style: STYLE_INSTRUCTIONS[args.style]}
-        if args.style
-        else STYLE_INSTRUCTIONS
-    )
+    if reuse_rewrites_mode:
+        if args.style:
+            styles_to_run = {args.style: ""}
+        else:
+            styles_to_run = {k: "" for k in sorted(frozen_rewrites_by_style.keys())}
+    else:
+        styles_to_run = (
+            {args.style: STYLE_INSTRUCTIONS[args.style]}
+            if args.style
+            else STYLE_INSTRUCTIONS
+        )
 
     all_dfs = []
     style_durations: dict[str, float] = {}
-    model_info = {
-        "rewriter": f"{rewriter_cfg['provider']}:{rewriter_cfg['model']}",
+    model_info: dict[str, str] = {
         "intent_checker": f"{intent_checker_cfg['provider']}:{intent_checker_cfg['model']}",
         "target": f"{target_cfg['provider']}:{target_cfg['model']}",
         "target_max_tokens": str(args.target_max_tokens),
@@ -1920,23 +2364,49 @@ def main():
         "target_reasoning_effort": args.target_reasoning_effort,
         "judge": f"{judge_cfg['provider']}:{judge_cfg['model']}",
     }
+    if reuse_rewrites_mode:
+        model_info["rewriter"] = f"frozen_rewrites:{frozen_rewrite_source}"
+        model_info["frozen_rewrites_source"] = frozen_rewrite_source
+    else:
+        assert rewriter_cfg is not None
+        model_info["rewriter"] = f"{rewriter_cfg['provider']}:{rewriter_cfg['model']}"
 
     for style_name, style_instruction in styles_to_run.items():
         style_start = time.perf_counter()
-        df = run_style(
-            style_name=style_name,
-            style_instruction=style_instruction,
-            rewriter_cfg=rewriter_cfg,
-            rewrite_checker_cfg=rewrite_checker_cfg,
-            intent_checker_cfg=intent_checker_cfg,
-            target_cfg=target_cfg,
-            target_max_tokens=args.target_max_tokens,
-            target_thinking_budget=max(0, int(args.target_thinking_budget)),
-            target_reasoning_effort=None if args.target_reasoning_effort == "none" else args.target_reasoning_effort,
-            judge_cfg=judge_cfg,
-            clients=clients,
-            run_dir=run_dir,
-        )
+        if reuse_rewrites_mode:
+            frozen_rewrites_df = frozen_rewrites_by_style.get(style_name)
+            if frozen_rewrites_df is None or frozen_rewrites_df.empty:
+                raise ValueError(
+                    f"No frozen rewritten prompts found for style '{style_name}' in source: {frozen_rewrite_source}"
+                )
+            df = run_style_frozen_rewrites(
+                style_name=style_name,
+                frozen_rewrites_df=frozen_rewrites_df,
+                intent_checker_cfg=intent_checker_cfg,
+                target_cfg=target_cfg,
+                target_max_tokens=args.target_max_tokens,
+                target_thinking_budget=max(0, int(args.target_thinking_budget)),
+                target_reasoning_effort=None if args.target_reasoning_effort == "none" else args.target_reasoning_effort,
+                judge_cfg=judge_cfg,
+                clients=clients,
+                run_dir=run_dir,
+            )
+        else:
+            assert rewriter_cfg is not None and rewrite_checker_cfg is not None
+            df = run_style(
+                style_name=style_name,
+                style_instruction=style_instruction,
+                rewriter_cfg=rewriter_cfg,
+                rewrite_checker_cfg=rewrite_checker_cfg,
+                intent_checker_cfg=intent_checker_cfg,
+                target_cfg=target_cfg,
+                target_max_tokens=args.target_max_tokens,
+                target_thinking_budget=max(0, int(args.target_thinking_budget)),
+                target_reasoning_effort=None if args.target_reasoning_effort == "none" else args.target_reasoning_effort,
+                judge_cfg=judge_cfg,
+                clients=clients,
+                run_dir=run_dir,
+            )
         style_durations[style_name] = time.perf_counter() - style_start
         print(f"  Duration ({style_name}): {style_durations[style_name]:.2f}s")
         all_dfs.append(df)
