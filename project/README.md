@@ -132,6 +132,23 @@ Run the attack pipeline from `project/`:
 python attack_pipeline.py
 ```
 
+Replay with frozen rewritten prompts from an existing run (skip rewriter/rewrite-checker):
+```powershell
+# Reuse all results_*.csv under attack_history/57
+python attack_pipeline.py --reuse-rewrites-from-run 57
+
+# Reuse one explicit source directory/file
+python attack_pipeline.py --reuse-rewrites-path attack_history/57
+python attack_pipeline.py --reuse-rewrites-path attack_history/57/results_riddle.csv
+```
+
+In replay mode, the pipeline:
+- loads `rewritten_prompt` from existing `results_*.csv`
+- does not call the rewriter or rewrite drift checker
+- only re-runs target + judge + intent checker
+- writes a new run under `attack_history/<new_run>/`
+
+Run one style:
 Run one attack style:
 
 ```powershell
@@ -148,6 +165,50 @@ cd defense
 python defense_pipeline.py
 ```
 
+Target reasoning controls:
+- `--target-max-tokens <int>` (default `4096`)
+- `--target-thinking-budget <int>` (default `2048`, set `0` to disable where supported)
+  - Gemini/Claude: native thinking budget controls
+  - OpenRouter/DeepSeek (OpenAI-compatible path): mapped to `reasoning.max_tokens`
+- `--target-reasoning-effort none|minimal|low|medium|high` (default `none`, mainly for OpenAI family)
+  - OpenRouter: mapped to `reasoning.effort` when set
+
+Planned 8-run experiment commands:
+```powershell
+# 1) Gemini 2.5 Flash with thinking
+python attack_pipeline.py --reuse-rewrites-from-run 57 --target-provider gemini --target-model gemini-2.5-flash --target-max-tokens 4096 --target-thinking-budget 2048 --target-reasoning-effort none
+
+# 2) Claude Haiku 4.5 with thinking budget 2048
+python attack_pipeline.py --reuse-rewrites-from-run 57 --target-provider claude --target-model claude-haiku-4-5-20251001 --target-max-tokens 4096 --target-thinking-budget 2048 --target-reasoning-effort none
+
+# 3) OpenAI GPT-5 mini with medium reasoning
+python attack_pipeline.py --reuse-rewrites-from-run 57 --target-provider openai --target-model gpt-5-mini --target-max-tokens 4096 --target-thinking-budget 0 --target-reasoning-effort medium
+
+# 4) Gemini 2.5 Flash with no thinking
+python attack_pipeline.py --reuse-rewrites-from-run 57 --target-provider gemini --target-model gemini-2.5-flash --target-max-tokens 4096 --target-thinking-budget 0 --target-reasoning-effort none
+
+# 5) Claude Haiku 4.5 with no thinking
+python attack_pipeline.py --reuse-rewrites-from-run 57 --target-provider claude --target-model claude-haiku-4-5-20251001 --target-max-tokens 4096 --target-thinking-budget 0 --target-reasoning-effort none
+
+# 6) OpenAI GPT-5 mini with no reasoning
+python attack_pipeline.py --reuse-rewrites-from-run 57 --target-provider openai --target-model gpt-5-mini --target-max-tokens 4096 --target-thinking-budget 0 --target-reasoning-effort none
+
+# 7) OpenRouter Qwen3-32B with reasoning effort medium (+reasoning budget 2048)
+python attack_pipeline.py --reuse-rewrites-from-run 57 --target-provider openrouter --target-model qwen/qwen3-32b --target-max-tokens 4096 --target-thinking-budget 2048 --target-reasoning-effort medium
+
+# 8) DeepSeek chat with thinking enabled
+python attack_pipeline.py --reuse-rewrites-from-run 57 --target-provider deepseek --target-model deepseek-chat --target-max-tokens 4096 --target-thinking-budget 2048 --target-reasoning-effort none
+```
+
+Automate the same suite with PowerShell:
+```powershell
+# Runs experiments 2-8 by default (skips baseline #1, since run 57 already has it)
+.\run_target_experiments.ps1 -ReuseRewritesFromRun 57
+
+# Include baseline #1 as well
+.\run_target_experiments.ps1 -ReuseRewritesFromRun 57 -IncludeBaselineExperiment
+
+# This script now includes experiments 7-8 as well (OpenRouter Qwen3-32B and DeepSeek V3.1 alias).
 Run the defense pipeline on real attack outputs from run 57:
 
 ```powershell
@@ -185,6 +246,29 @@ For the frozen defense benchmark definition:
 
 - `defense/benchmarks/proposal_v1/`
 
+## Quick Preflight Check
+Before running the full pipeline, you can verify stage and provider connectivity:
+```powershell
+python attack_pipeline.py --ping-only
+```
+
+## Attack History
+You may view past attacks, the folders for the different models are as follows:
+- gemini 2.5 flash 
+  - thinking: 57
+  - no thinking: 67
+
+- claude haiku 4-5 
+  - thinking: 63
+  - no thinking: 70
+
+- openai gpt 5 mini 
+  - reasoning: 66
+  - no reasoning: 69
+
+- qwen thinking : 71
+
+- deepseek reasoning: 72
 For the defense comparison currently used in this cleaned repo:
 
 - `defense/outputs/attack57_real_attack_comparison.csv`
