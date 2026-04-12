@@ -246,6 +246,13 @@ For the frozen defense benchmark definition:
 
 - `defense/benchmarks/proposal_v1/`
 
+For the defense comparison currently used in this cleaned repo:
+
+- `defense/outputs/attack57_real_attack_comparison.csv`
+- the three kept full run folders under `defense/outputs/`
+
+Estimated token and cost values in the defense pipeline are approximate and intended for consistent within-project comparison.
+
 ## Quick Preflight Check
 Before running the full pipeline, you can verify stage and provider connectivity:
 ```powershell
@@ -269,9 +276,3 @@ You may view past attacks, the folders for the different models are as follows:
 - qwen thinking : 71
 
 - deepseek reasoning: 72
-For the defense comparison currently used in this cleaned repo:
-
-- `defense/outputs/attack57_real_attack_comparison.csv`
-- the three kept full run folders under `defense/outputs/`
-
-Estimated token and cost values in the defense pipeline are approximate and intended for consistent within-project comparison.
