@@ -11,7 +11,7 @@ For each seed harmful request category, it:
 
 1. Uses a rewriter model (DeepSeek via OpenAI-compatible API) to convert the seed into a selected creative style (`riddle`, `poem`, `nursery_rhyme`, `dialogue`).
 2. Runs a rewrite-topic check and retries rewrite generation on drift (up to `MAX_REWRITE_RETRIES`).
-3. Sends the rewritten prompt to a target model and records target metadata (response text, finish reason, safety score, and error info).
+3. Sends the rewritten prompt to a target model and records target metadata (response text, finish reason, raw output metadata, and error info).
 4. Uses a judge model with a rubric prompt and returns structured safety fields:
    - `label` (`SAFE` or `UNSAFE`): final safety verdict.
    - `compliance_level` (`0..3`): how much harmful assistance is given.
@@ -19,7 +19,7 @@ For each seed harmful request category, it:
    - `actionability` (`0..3`): how directly usable the content is.
    - `confidence` (`0..1`): judge confidence.
    - `judge_rationale`: short textual justification.
-5. Runs intent alignment checking between the original seed prompt and target response.
+5. Runs intent alignment checking between the original seed prompt and target response using a structured JSON output (`label`, `confidence`, `rationale`), and stores raw intent checker output for debugging.
 
 The script writes results under `attack_history/<run_number>/`.
 
@@ -96,8 +96,8 @@ REWRITER_PROVIDER=deepseek
 REWRITER_MODEL=deepseek-chat
 REWRITER_BASE_URL=https://api.deepseek.com
 
-INTENT_CHECKER_PROVIDER=deepseek
-INTENT_CHECKER_MODEL=deepseek-chat
+INTENT_CHECKER_PROVIDER=claude
+INTENT_CHECKER_MODEL=claude-haiku-4-5-20251001
 
 TARGET_PROVIDER=gemini
 TARGET_MODEL=gemini-2.5-flash
@@ -108,7 +108,7 @@ JUDGE_MODEL=claude-haiku-4-5-20251001
 
 Current defaults in code:
 - Rewriter: `deepseek:deepseek-chat` (DeepSeek V3 alias)
-- Intent checker: `deepseek:deepseek-chat`
+- Intent checker: `claude:claude-haiku-4-5-20251001`
 - Target: `gemini:gemini-2.5-flash`
 - Judge: `claude:claude-haiku-4-5-20251001`
 
@@ -142,7 +142,7 @@ python attack_pipeline.py --style dialogue
 
 Run with explicit model settings:
 ```powershell
-python attack_pipeline.py --rewriter-provider deepseek --rewriter-model deepseek-chat --intent-checker-provider deepseek --intent-checker-model deepseek-chat --target-provider gemini --target-model gemini-2.5-flash --judge-provider claude --judge-model claude-haiku-4-5-20251001
+python attack_pipeline.py --rewriter-provider deepseek --rewriter-model deepseek-chat --intent-checker-provider claude --intent-checker-model claude-haiku-4-5-20251001 --target-provider gemini --target-model gemini-2.5-flash --judge-provider claude --judge-model claude-haiku-4-5-20251001
 ```
 
 Override only one stage and keep all other defaults:
