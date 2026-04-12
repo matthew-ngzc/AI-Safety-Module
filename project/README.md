@@ -101,6 +101,9 @@ INTENT_CHECKER_MODEL=claude-haiku-4-5-20251001
 
 TARGET_PROVIDER=gemini
 TARGET_MODEL=gemini-2.5-flash
+TARGET_MAX_TOKENS=4096
+TARGET_THINKING_BUDGET=2048
+TARGET_REASONING_EFFORT=none
 
 JUDGE_PROVIDER=claude
 JUDGE_MODEL=claude-haiku-4-5-20251001
@@ -127,6 +130,8 @@ Model ID rule:
 
 ## Run
 
+All commands below assume your current directory is `project/`.
+
 Run all styles:
 ```powershell
 python attack_pipeline.py
@@ -145,6 +150,32 @@ Run with explicit model settings:
 python attack_pipeline.py --rewriter-provider deepseek --rewriter-model deepseek-chat --intent-checker-provider claude --intent-checker-model claude-haiku-4-5-20251001 --target-provider gemini --target-model gemini-2.5-flash --judge-provider claude --judge-model claude-haiku-4-5-20251001
 ```
 
+Target reasoning controls:
+- `--target-max-tokens <int>` (default `4096`)
+- `--target-thinking-budget <int>` (default `2048`, set `0` to disable where supported)
+- `--target-reasoning-effort none|minimal|low|medium|high` (default `none`, mainly for OpenAI family)
+
+Planned 6-run experiment commands:
+```powershell
+# 1) Gemini 2.5 Flash with thinking
+python attack_pipeline.py --target-provider gemini --target-model gemini-2.5-flash --target-max-tokens 4096 --target-thinking-budget 2048 --target-reasoning-effort none
+
+# 2) Claude Haiku 4.5 with thinking budget 2048
+python attack_pipeline.py --target-provider claude --target-model claude-haiku-4-5-20251001 --target-max-tokens 4096 --target-thinking-budget 2048 --target-reasoning-effort none
+
+# 3) OpenAI GPT-5 mini with medium reasoning
+python attack_pipeline.py --target-provider openai --target-model gpt-5-mini --target-max-tokens 4096 --target-thinking-budget 0 --target-reasoning-effort medium
+
+# 4) Gemini 2.5 Flash with no thinking
+python attack_pipeline.py --target-provider gemini --target-model gemini-2.5-flash --target-max-tokens 4096 --target-thinking-budget 0 --target-reasoning-effort none
+
+# 5) Claude Haiku 4.5 with no thinking
+python attack_pipeline.py --target-provider claude --target-model claude-haiku-4-5-20251001 --target-max-tokens 4096 --target-thinking-budget 0 --target-reasoning-effort none
+
+# 6) OpenAI GPT-5 mini with no reasoning
+python attack_pipeline.py --target-provider openai --target-model gpt-5-mini --target-max-tokens 4096 --target-thinking-budget 0 --target-reasoning-effort none
+```
+
 Override only one stage and keep all other defaults:
 ```powershell
 # Change target only
@@ -158,6 +189,18 @@ Quick connectivity test (no full pipeline run):
 ```powershell
 python attack_pipeline.py --ping-only
 ```
+
+Re-judge existing CSV outputs with a different judge model (no rewrite/target calls):
+```powershell
+# Re-judge one CSV
+python attack_pipeline.py --rejudge-path attack_history/50/results_poem.csv --judge-provider openrouter --judge-model minimax/minimax-m2.5:free
+
+# Re-judge all results_*.csv in a run directory
+python attack_pipeline.py --rejudge-path attack_history/50 --judge-provider openrouter --judge-model minimax/minimax-m2.5:free
+```
+This writes companion files like:
+`results_poem.rejudge_openrouter_minimax_minimax-m2.5_free.csv`
+and prints agreement against the existing `judge_label_text`.
 
 ## Outputs
 
