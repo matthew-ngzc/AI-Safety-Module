@@ -19,7 +19,7 @@ In the real integrated setup, the defense is inserted after the frozen attack re
 - saved attack runs under `attack_history/`
 - the defense pipeline and frozen benchmark snapshot under `defense/`
 - kept real-attack defense outputs for the run-57 linkage
-- comparison artifacts for the three defense strategies
+- one compact comparison artifact for the three defense strategies
 
 ## Repository Layout
 
@@ -39,9 +39,8 @@ Important files inside `defense/`:
 - `prompts.py`: prompt templates and label definitions
 - `pricing.py`: estimated token and cost accounting
 - `benchmarks/proposal_v1/`: frozen proposal-aligned benchmark snapshot
-- `outputs/`: kept defense runs and comparison artifacts
-- `scripts/compare_runs.py`: rebuilds comparison tables across completed runs
-- `scripts/analyze_suspicious_failures.py`: targeted failure-analysis helper
+- `outputs/`: kept defense runs and the run-57 comparison CSV
+- `scripts/compare_runs.py`: rebuilds comparison tables across completed runs when needed
 - `.env.example`: defense-side environment template
 
 ## Attack Pipeline
@@ -98,7 +97,6 @@ The `defense/outputs/` folder has been cleaned to keep only the real run-57 eval
 - `defense/outputs/20260412T154910Z_attack57_intent_guarded_full`
 - `defense/outputs/20260412T151904Z_attack57_suspicious_intent_guarded_full`
 - `defense/outputs/attack57_real_attack_comparison.csv`
-- `defense/outputs/attack57_real_attack_comparison.md`
 
 These are the main files to inspect for the current defense comparison.
 
@@ -166,7 +164,7 @@ cd defense
 python defense_pipeline.py --attack-run-dir ..\attack_history\57 --paraphraser-strategy suspicious_intent_guarded --limit 2
 ```
 
-Rebuild the real-attack defense comparison:
+Rebuild the real-attack defense comparison CSV if needed:
 
 ```powershell
 cd defense
@@ -174,8 +172,7 @@ python scripts/compare_runs.py ^
   --run-dir outputs/20260412T154910Z_attack57_baseline_full ^
   --run-dir outputs/20260412T154910Z_attack57_intent_guarded_full ^
   --run-dir outputs/20260412T151904Z_attack57_suspicious_intent_guarded_full ^
-  --output-csv outputs/attack57_real_attack_comparison.csv ^
-  --output-md outputs/attack57_real_attack_comparison.md
+  --output-csv outputs/attack57_real_attack_comparison.csv
 ```
 
 ## Source Of Truth
@@ -191,7 +188,6 @@ For the frozen defense benchmark definition:
 For the defense comparison currently used in this cleaned repo:
 
 - `defense/outputs/attack57_real_attack_comparison.csv`
-- `defense/outputs/attack57_real_attack_comparison.md`
 - the three kept full run folders under `defense/outputs/`
 
 Estimated token and cost values in the defense pipeline are approximate and intended for consistent within-project comparison.

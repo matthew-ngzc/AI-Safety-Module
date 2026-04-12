@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
@@ -43,8 +43,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-md",
-        default="analysis/comparison_summary.md",
-        help="Path for human-readable comparison output.",
+        default=None,
+        help="Optional path for human-readable comparison output.",
     )
     return parser.parse_args()
 
@@ -121,7 +121,7 @@ def build_markdown(df: pd.DataFrame) -> str:
     header = [
         "# Defense Run Comparison",
         "",
-        "These results compare only the clean full upgraded-framework runs on `proposal_v1`.",
+        "These results compare only the supplied clean defense run directories.",
         "",
         "## Main Table",
         "",
@@ -203,15 +203,15 @@ def main() -> None:
     comparison_df = pd.DataFrame(records).sort_values(by="strategy").reset_index(drop=True)
 
     output_csv = Path(args.output_csv)
-    output_md = Path(args.output_md)
     output_csv.parent.mkdir(parents=True, exist_ok=True)
-    output_md.parent.mkdir(parents=True, exist_ok=True)
-
     comparison_df.to_csv(output_csv, index=False)
-    output_md.write_text(build_markdown(comparison_df), encoding="utf-8")
-
     print(f"Wrote comparison CSV: {output_csv}")
-    print(f"Wrote comparison markdown: {output_md}")
+
+    if args.output_md:
+        output_md = Path(args.output_md)
+        output_md.parent.mkdir(parents=True, exist_ok=True)
+        output_md.write_text(build_markdown(comparison_df), encoding="utf-8")
+        print(f"Wrote comparison markdown: {output_md}")
 
 
 if __name__ == "__main__":
